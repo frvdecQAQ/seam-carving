@@ -16,12 +16,15 @@ enum ENERGY{
 
 class SeamCarve {
 public:
+    cv::Mat img_in;
+    cv::Mat remove_mask;
     cv::Mat img_out;
 
     explicit SeamCarve(int max_h, int max_w);
     void set_img_in(const char* img_path);
     void set_forward(bool is_forward);
     void set_remove_mask(const char* img_path);
+    void set_optimal_order(bool optimal);
     void show_img_out() const;
     void store_img_out(const char* img_path) const;
     void run(int iter_h, int iter_w);
@@ -34,12 +37,10 @@ private:
     static int getId(int i, int j, int w);
     static double delEnergy(const cv::Mat& gray, int x, int y, int u, int v);
     void getDpResult(const cv::Mat& gray);
-    void removeHorizon(int iter);
+    double removeHorizon(int iter);
     void insertHorizon(int iter);
     void computeEnergy(const cv::Mat& gray);
 
-    cv::Mat img_in;
-    cv::Mat remove_mask;
     enum ENERGY energy_choice{kGrad};
     int max_h, max_w;
     double *dp;
@@ -50,6 +51,7 @@ private:
     const double inf = 1e10;
     bool forward;
     bool remove;
+    bool is_optimal;
 
 };
 

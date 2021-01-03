@@ -48,6 +48,49 @@ void SeamCarve::run(int iter_h, int iter_w) {
         printf("ERROR: THE SCALE IS NOT RIGHT\n");
         exit(0);
     }
+    if(iter_h < 0 && iter_w < 0 && is_optimal){
+        int count_step = 5;
+        int count_h = (img_out.rows-goal_h-1)/count_step+1;
+        int count_w = (img_out.cols-goal_w-1)/count_step+1;
+        cv::Mat img_order[count_h+1][count_w+1];
+        double dp_order[count_h+1][count_w+1];
+        std::pair<int, int> dp_src[count_h+1][count_w+1];
+        for(int i = 0; i <= count_h; ++i){
+            for(int j = 0; j <= count_w; ++j){
+                if(i == 0 && j == 0){
+                    img_order[i][j] = img_in.clone();
+                    dp_order[i][j] = 0;
+                    dp_src[i][j] = std::make_pair(-1, -1);
+                    continue;
+                }
+                dp_order[i][j] = inf;
+                if(i > 0){
+                    img_out = img_order[i-1][j].clone();
+                    img_out = img_out.t();
+                    int remove_iter = -std::min(-iter_h-(i-1)*count_step, count_step);
+                    double tmp = removeHorizon(remove_iter);
+                    img_out = img_out.t();
+                    if(dp_order[i][j] > dp_order[i-1][j]+tmp){
+                        dp_order[i][j] = dp_order[i-1][j]+tmp;
+                        dp_src[i][j] = std::make_pair(i-1, j);
+                        img_order[i][j] = img_out.clone();
+                    }
+                }
+                if(j > 0){
+                    img_out = img_order[i][j-1].clone();
+                    int remove_iter = -std::min(-iter_w-(j-1)*count_step, count_step);
+                    double tmp = removeHorizon(remove_iter);
+                    if(dp_order[i][j] > dp_order[i][j-1]+tmp){
+                        dp_order[i][j] = dp_order[i][j-1]+tmp;
+                        dp_src[i][j] = std::make_pair(i, j-1);
+                        img_order[i][j] = img_out.clone();
+                    }
+                }
+            }
+        }
+        img_out = img_order[count_h][count_w].clone();
+        return;
+    }
     if(iter_w != 0){
         if(iter_w < 0)removeHorizon(iter_w);
         else insertHorizon(iter_w);
@@ -62,7 +105,7 @@ void SeamCarve::run(int iter_h, int iter_w) {
 
 void SeamCarve::remove_object() {
     img_out = img_in.clone();
-    int origin_h = img_in.rows;
+    //int origin_h = img_in.rows;
     int origin_w = img_in.cols;
     remove = false;
     for(int i = 0; i < remove_mask.cols; ++i){
@@ -108,9 +151,9 @@ void SeamCarve::insertHorizon(int iter) {
         cv::cvtColor(img_out, gray_out, cv::COLOR_BGR2GRAY);
         int goal_w = img_out.cols+iter_step;
         while(iter_step--){
-            printf("iter = %d\n", iter_step);
+            //printf("iter = %d\n", iter_step);
             endTime = clock();
-            std::cout << "The run time is: " <<(double)(endTime - startTime) / CLOCKS_PER_SEC << "s" << std::endl;
+            //std::cout << "The run time is: " <<(double)(endTime - startTime) / CLOCKS_PER_SEC << "s" << std::endl;
             computeEnergy(gray_out);
             getDpResult(gray_out);
             int ans_x, ans_y;
@@ -148,10 +191,11 @@ void SeamCarve::insertHorizon(int iter) {
     }
 }
 
-void SeamCarve::removeHorizon(int iter) {
+double SeamCarve::removeHorizon(int iter) {
     cv::Mat gray_out;
     cv::cvtColor(img_out, gray_out, cv::COLOR_BGR2GRAY);
     int real_iter = -iter;
+    double energy_cost = 0;
     clock_t startTime, endTime;
     startTime = clock();
     while(real_iter--){
@@ -170,6 +214,7 @@ void SeamCarve::removeHorizon(int iter) {
                 ans_x = i;
             }
         }
+        energy_cost += ans;
         while(ans_x != -1){
             for(int i = ans_x; i < gray_out.cols-1; ++i){
                 gray_out.at<uchar>(ans_y, i) = gray_out.at<uchar>(ans_y, i+1);
@@ -183,6 +228,7 @@ void SeamCarve::removeHorizon(int iter) {
     }
     img_out = img_out(cv::Rect(0, 0, img_out.cols+iter, img_out.rows));
     if(remove)remove_mask = remove_mask(cv::Rect(0, 0, img_out.cols+iter, img_out.rows));
+    return energy_cost;
 }
 
 void SeamCarve::computeEnergy(const cv::Mat& gray) {
@@ -202,69 +248,72 @@ void SeamCarve::computeEnergy(const cv::Mat& gray) {
             int window_len = 9;
             int window_size = window_len * window_len;
             int window_len_half = (window_len >> 1);
-            auto *compute_entropy = new double[window_size + 1];
-            for (int i = 1; i <= window_size; ++i) {
-                double p = (double) (i) / window_size;
-                compute_entropy[i] = -p * std::log2(p);
+            double compute_entropy[window_size+1][window_size+1];
+            for(int i = 1; i <= window_size; ++i){
+                for(int j = 1; j <= i; ++j){
+                    double p = (double)(j)/i;
+                    compute_entropy[j][i] = -p*std::log2(p);
+                }
             }
             int vis_cnt[256];
-            std::set<int> color;
             for (int i = 0; i < gray.cols; ++i) {
                 int window_cnt = 0;
                 int u_st = std::max(0, i - window_len_half);
                 int u_ed = std::min(i + window_len_half + 1, gray.cols);
                 int v_st = 0;
                 int v_ed = std::min(window_len_half + 1, gray.rows);
-                color.clear();
+                for(int j = 0; j < 256; ++j)vis_cnt[j] = 0;
                 for (int u = u_st; u < u_ed; ++u) {
                     for (int v = v_st; v < v_ed; ++v) {
                         int now_color = gray.at<uchar>(v, u);
-                        if (color.find(now_color) == color.end()) {
-                            vis_cnt[now_color] = 1;
-                            color.insert(now_color);
-                        } else vis_cnt[now_color]++;
+                        vis_cnt[now_color]++;
                         window_cnt++;
                     }
                 }
+                double add_entropy = 0;
                 int id = getId(i, 0, gray.rows);
-                for (auto tmp: color) {
-                    if (window_cnt == window_size)energy_map[id] += compute_entropy[vis_cnt[tmp]];
-                    else {
-                        energy_map[id] -= vis_cnt[tmp] * std::log2(vis_cnt[tmp]);
-                    }
+                for (int j = 0; j < 256; ++j) {
+                    if(vis_cnt[j] == 0)continue;
+                    add_entropy += compute_entropy[vis_cnt[j]][window_cnt];
                 }
+                energy_map[id] += add_entropy;
                 for (int j = 1; j < gray.rows; ++j) {
+                    int last_window_cnt = window_cnt;
+                    if (j > window_len_half) window_cnt -= (u_ed - u_st);
+                    if (j < gray.rows - window_len_half) window_cnt += (u_ed - u_st);
                     if (j > window_len_half) {
                         int del_row = j - window_len_half - 1;
-                        window_cnt -= (u_ed - u_st);
                         for (int u = u_st; u < u_ed; ++u) {
                             int now_color = gray.at<uchar>(del_row, u);
+                            add_entropy -= compute_entropy[vis_cnt[now_color]][window_cnt];
                             vis_cnt[now_color]--;
-                            if (vis_cnt[now_color] == 0)color.erase(now_color);
+                            if(vis_cnt[now_color]!= 0){
+                                add_entropy += compute_entropy[vis_cnt[now_color]][window_cnt];
+                            }
                         }
                     }
                     if (j < gray.rows - window_len_half) {
                         int add_row = j + window_len_half;
-                        window_cnt += (u_ed - u_st);
                         for (int u = u_st; u < u_ed; ++u) {
                             int now_color = gray.at<uchar>(add_row, u);
-                            if (color.find(now_color) == color.end()) {
-                                color.insert(now_color);
-                                vis_cnt[now_color] = 1;
-                            } else vis_cnt[now_color]++;
+                            if(vis_cnt[now_color] != 0){
+                                add_entropy -= compute_entropy[vis_cnt[now_color]][window_cnt];
+                            }
+                            vis_cnt[now_color]++;
+                            add_entropy += compute_entropy[vis_cnt[now_color]][window_cnt];
                         }
                     }
                     id = getId(i, j, gray.rows);
-                    for (auto tmp: color) {
-                        //printf("%d %d\n", tmp, vis_cnt[tmp]);
-                        if (window_cnt == window_size)energy_map[id] += compute_entropy[vis_cnt[tmp]];
-                        else {
-                            energy_map[id] -= vis_cnt[tmp] * std::log2(vis_cnt[tmp]);
+                    if(last_window_cnt != window_cnt){
+                        add_entropy = 0;
+                        for(int t = 0; t < 256; ++t){
+                            if(vis_cnt[t] == 0)continue;
+                            add_entropy += compute_entropy[vis_cnt[t]][window_cnt];
                         }
                     }
+                    energy_map[id] += add_entropy;
                 }
             }
-            delete[] compute_entropy;
             break;
         }
         case kHOG: {
@@ -380,8 +429,6 @@ void SeamCarve::getDpResult(const cv::Mat& gray) {
 
 double SeamCarve::delEnergy(const cv::Mat &gray, int x, int y, int u, int v) {
     int gray_u, gray_v;
-    //if(x < 0 || x >= gray.cols || y < 0 || y >= gray.rows)return 0;
-    //if(u < 0 || u >= gray.cols || v < 0 || v >= gray.cols)return 0;
     gray_u = gray.at<uchar>(y, x);
     gray_v = gray.at<uchar>(v, u);
     return std::abs(gray_u-gray_v);
@@ -389,5 +436,9 @@ double SeamCarve::delEnergy(const cv::Mat &gray, int x, int y, int u, int v) {
 
 void SeamCarve::set_remove_mask(const char *img_path) {
     remove_mask = cv::imread(img_path);
+}
+
+void SeamCarve::set_optimal_order(bool optimal){
+    is_optimal = optimal;
 }
 
